@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AidMap</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='AidMap.png', v=2) }}">
+    <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='AidMap.png', v=2) }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='AidMap.png', v=2) }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='AidMap.png', v=2) }}">
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --secondary: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-500: #6b7280;
+            --gray-700: #374151;
+            --gray-900: #111827;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--gray-50);
+            color: var(--gray-900);
+            line-height: 1.5;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            position: relative;
+        }
+
+        #map {
+            flex: 1;
+            height: 100%;
+            position: relative;
+        }
+
+        #map.selecting-location::after {
+            content: 'Click anywhere on the map to select location';
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(37, 99, 235, 0.95);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            z-index: 1;
+            box-shadow: var(--shadow-lg);
+            pointer-events: none;
+        }
+
+        .sidebar {
+            width: 420px;
+            background: white;
+            box-shadow: var(--shadow-xl);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 10;
+        }
+
+        .sidebar-header {
+            padding: 32px 28px 28px;
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+            color: white;
+            position: relative;
+        }
+
+        .sidebar-header::after {
+            content: '';
+            position: absolute;
+            bottom: -20px;
+            left: 0;
+            right: 0;
+            height: 20px;
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+            clip-path: polygon(0 0, 100% 0, 100% 100%);
+        }
+
+        .header-content h1 {
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            letter-spacing: -0.025em;
+        }
+
+        .header-content .subtitle {
+            font-size: 15px;
+            opacity: 0.95;
+            font-weight: 400;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .header-brand img {
+            width: 64px;
+            height: 64px;
+            object-fit: contain;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+        }
+
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-item {
+            flex: 1;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            opacity: 0.85;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 28px;
+        }
+
+        .sidebar-content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-track {
+            background: var(--gray-100);
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb {
+            background: var(--gray-300);
+            border-radius: 4px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb:hover {
+            background: var(--gray-500);
+        }
+
+        .section {
+            margin-bottom: 28px;
+        }
+
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--gray-500);
+            margin-bottom: 12px;
+        }
+
+        .filter-group {
+            margin-bottom: 16px;
+        }
+
+        .filter-group label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--gray-700);
+            font-size: 14px;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid var(--gray-300);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.2s;
+            background: white;
+            color: var(--gray-900);
+        }
+
+        .filter-group select:focus,
+        .filter-group input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 13px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-success {
+            background: var(--secondary);
+            color: white;
+            margin-top: 10px;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-outline {
+            background: white;
+            color: var(--gray-700);
+            border: 1.5px solid var(--gray-300);
+            margin-top: 10px;
+        }
+
+        .btn-outline:hover {
+            border-color: var(--gray-500);
+            background: var(--gray-50);
+        }
+
+        .location-card {
+            background: white;
+            padding: 18px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            border: 1px solid var(--gray-200);
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+            --accent-color: var(--primary);
+        }
+
+        .location-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
+        }
+
+        .location-card::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            border-radius: 10px 0 0 10px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            background: var(--accent-color, var(--primary));
+        }
+
+        .location-card:hover::before {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 8px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-900);
+        }
+
+        .card-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .card-description {
+            font-size: 14px;
+            color: var(--gray-500);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .card-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-top: 12px;
+            border-top: 1px solid var(--gray-100);
+        }
+
+        .verification-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--gray-100);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--gray-700);
+        }
+
+        .verification-badge.verified {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(4px);
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .modal.pass-through {
+            pointer-events: none;
+        }
+
+        .modal.pass-through .modal-content {
+            pointer-events: auto;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background: white;
+            margin: 4% auto;
+            padding: 0;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 540px;
+            max-height: 88vh;
+            overflow: hidden;
+            box-shadow: var(--shadow-xl);
+            animation: slideUp 0.3s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateY(40px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+
+        .modal-header {
+            padding: 28px 32px;
+            border-bottom: 1px solid var(--gray-200);
+            background: var(--gray-50);
+        }
+
+        .modal-header h2 {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--gray-900);
+            letter-spacing: -0.025em;
+        }
+
+        .modal-body {
+            padding: 32px;
+            max-height: calc(88vh - 180px);
+            overflow-y: auto;
+        }
+
+        .close {
+            position: absolute;
+            right: 20px;
+            top: 20px;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: 400;
+            color: var(--gray-500);
+            cursor: pointer;
+            border: none;
+            background: white;
+            transition: all 0.2s;
+        }
+
+        .close:hover {
+            background: var(--gray-100);
+            color: var(--gray-900);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--gray-700);
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--gray-300);
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+            background: white;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 90px;
+        }
+
+        .form-group input[type="file"] {
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        .form-hint {
+            font-size: 13px;
+            color: var(--gray-500);
+            margin-top: 6px;
+        }
+
+        .alert {
+            padding: 14px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: flex;
+            align-items: start;
+            gap: 10px;
+        }
+
+        .alert-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #6ee7b7;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+
+        .mapboxgl-popup-content {
+            padding: 20px;
+            min-width: 260px;
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .popup-content h3 {
+            color: var(--gray-900);
+            margin-bottom: 10px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .popup-content p {
+            margin: 6px 0;
+            font-size: 14px;
+            color: var(--gray-700);
+        }
+
+        .popup-content img {
+            width: 100%;
+            max-height: 180px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin: 12px 0;
+        }
+
+        .popup-content .btn {
+            margin-top: 12px;
+        }
+
+        .moderator-panel {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #fbbf24;
+        }
+
+        .moderator-panel h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            color: var(--gray-900);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .pending-item {
+            background: white;
+            padding: 18px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            border: 1px solid var(--gray-200);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .pending-item h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: 10px;
+        }
+
+        .pending-item p {
+            font-size: 14px;
+            color: var(--gray-600);
+            margin-bottom: 6px;
+        }
+
+        .pending-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .btn-approve {
+            flex: 1;
+            padding: 10px 16px;
+            background: var(--secondary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-approve:hover {
+            background: #059669;
+            transform: translateY(-1px);
+        }
+
+        .btn-reject {
+            flex: 1;
+            padding: 10px 16px;
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-reject:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--gray-500);
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--gray-200);
+            margin: 20px 0;
+        }
+
+        @media (max-width: 968px) {
+            .sidebar {
+                width: 360px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                max-height: 60vh;
+                order: 2;
+            }
+
+            #map {
+                height: 40vh;
+                order: 1;
+            }
+        }
+    </style>
+</head>
+<body data-mapbox-token="{{ mapbox_token }}" data-resource-types='{{ resource_types | tojson }}'>
+    <div class="container">
+        <div id="map"></div>
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="header-content">
+                    <div class="header-brand">
+                        <img src="{{ url_for('static', filename='AidMap.png', v=2) }}" alt="AidMap logo">
+                        <div>
+                            <h1>AidMap</h1>
+                            <p class="subtitle">Community-verified emergency equipment locations</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="stats-bar">
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalLocations">0</span>
+                        <span class="stat-label">Locations</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalVerifications">0</span>
+                        <span class="stat-label">Verifications</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar-content">
+                <div class="section">
+                    <div class="section-title">Filters</div>
+                    <div class="filter-group">
+                        <label for="resourceFilter">Resource Type</label>
+                        <select id="resourceFilter">
+                            <option value="">All Types</option>
+                            {% for resource in resource_types %}
+                            <option value="{{ resource.value }}">{{ resource.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <button class="btn btn-primary" onclick="openSubmitModal()">
+                        <span>➕</span> Submit New Location
+                    </button>
+                    <button class="btn btn-success" onclick="openVoteInfo()">
+                        <span>ℹ️</span> How to Verify
+                    </button>
+                    <button class="btn btn-outline" onclick="openModeratorLogin()">
+                        <span>🔒</span> Moderator Access
+                    </button>
+                </div>
+
+                <div id="moderatorPanel" class="moderator-panel" style="display: none;">
+                    <h3><span>⚡</span> Moderator Panel</h3>
+                    <button class="btn btn-primary" onclick="loadPendingSubmissions()">Review Pending Submissions</button>
+                    <button class="btn btn-outline" onclick="logout()" style="margin-top: 10px;">Logout</button>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Nearby Locations</div>
+                    <div id="locationsList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Submit Modal -->
+    <div id="submitModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Submit New Location</h2>
+                <button class="close" onclick="closeSubmitModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="submitAlert"></div>
+                
+                <!-- Step 1: Location Selection -->
+                <div id="locationStep" style="display: block;">
+                    <div style="background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 20px; border: 2px dashed var(--primary);">
+                        <div style="font-size: 48px; margin-bottom: 12px;">📍</div>
+                        <h3 style="margin-bottom: 8px; color: var(--gray-900);">Click on the map to set location</h3>
+                        <p style="color: var(--gray-600); font-size: 14px;">Choose the exact location of the medical supply</p>
+                    </div>
+                    
+                    <div id="selectedLocation" style="display: none; background: var(--gray-50); padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                            <span style="font-size: 24px;">✓</span>
+                            <div>
+                                <div style="font-weight: 600; color: var(--gray-900);">Location Selected</div>
+                                <div style="font-size: 13px; color: var(--gray-600);">
+                                    Lat: <span id="displayLat">-</span>, Lng: <span id="displayLng">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-outline" onclick="clearLocation()" style="width: 100%; margin-top: 8px;">
+                            Change Location
+                        </button>
+                    </div>
+                    
+                    <button type="button" id="continueBtn" class="btn btn-primary" onclick="continueToDetails()" style="display: none;">
+                        Continue to Details →
+                    </button>
+                </div>
+                
+                <!-- Step 2: Details Form -->
+                <div id="detailsStep" style="display: none;">
+                    <form id="submitForm" onsubmit="submitLocation(event)">
+                        <input type="hidden" id="submitLat">
+                        <input type="hidden" id="submitLng">
+                        
+                        <div class="form-group">
+                            <label for="resourceType">Resource Type *</label>
+                            <select id="resourceType" required>
+                                <option value="">Select type...</option>
+                                {% for resource in resource_types %}
+                                <option value="{{ resource.value }}">{{ resource.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="description">Description</label>
+                            <textarea id="description" placeholder="E.g., Located on 2nd floor near elevator, accessible 24/7" maxlength="1000"></textarea>
+                            <p class="form-hint">Provide details about location and accessibility</p>
+                        </div>
+                        <div class="form-group">
+                            <label for="image">Upload Photo (Optional)</label>
+                            <input type="file" id="image" accept="image/jpeg,image/png,image/jpg">
+                            <p class="form-hint">Helps others identify the exact location</p>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn btn-outline" onclick="backToLocation()" style="flex: 1;">
+                                ← Back
+                            </button>
+                            <button type="submit" class="btn btn-primary" style="flex: 2;">Submit for Review</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Moderator Login Modal -->
+    <div id="moderatorModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Moderator Login</h2>
+                <button class="close" onclick="closeModeratorModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="moderatorAlert"></div>
+                <form id="moderatorForm" onsubmit="moderatorLogin(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" required autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pending Submissions Modal -->
+    <div id="pendingModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Pending Submissions</h2>
+                <button class="close" onclick="closePendingModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="pendingList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const mapboxToken = document.body.dataset.mapboxToken || '';
+        mapboxgl.accessToken = mapboxToken;
+        if (!mapboxgl.accessToken) {
+            console.error('Mapbox token missing. Set MAPBOX_TOKEN in the server environment.');
+        }
+
+        const resourceTypesRaw = document.body.dataset.resourceTypes || '[]';
+        let RESOURCE_TYPES = [];
+        try {
+            RESOURCE_TYPES = JSON.parse(resourceTypesRaw);
+        } catch (error) {
+            console.error('Failed to parse resource types configuration.', error);
+        }
+
+        const RESOURCE_TYPE_MAP = RESOURCE_TYPES.reduce((acc, type) => {
+            if (type && type.value) {
+                acc[type.value] = type;
+            }
+            return acc;
+        }, {});
+
+        const DEFAULT_MARKER_COLOR = '#2563eb';
+        const DEFAULT_BADGE_BACKGROUND = '#dbeafe';
+        const DEFAULT_BADGE_COLOR = '#1e40af';
+        
+        let map;
+        let markers = [];
+        let submissions = [];
+        let tempMarker = null;
+
+        // Initialize map
+        function initMap() {
+            map = new mapboxgl.Map({
+                container: 'map',
+                style: 'mapbox://styles/mapbox/streets-v12',
+                center: [-98.5795, 39.8283],
+                zoom: 4
+            });
+
+            map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+            map.addControl(new mapboxgl.GeolocateControl({
+                positionOptions: { enableHighAccuracy: true },
+                trackUserLocation: true
+            }), 'top-right');
+
+            map.on('click', (e) => {
+                const modalOpen = document.getElementById('submitModal').style.display === 'block';
+                const onLocationStep = document.getElementById('locationStep').style.display === 'block';
+                
+                if (modalOpen && onLocationStep) {
+                    // Set the coordinates
+                    document.getElementById('submitLat').value = e.lngLat.lat.toFixed(6);
+                    document.getElementById('submitLng').value = e.lngLat.lng.toFixed(6);
+                    
+                    // Update display
+                    document.getElementById('displayLat').textContent = e.lngLat.lat.toFixed(6);
+                    document.getElementById('displayLng').textContent = e.lngLat.lng.toFixed(6);
+                    
+                    // Show confirmation
+                    document.getElementById('selectedLocation').style.display = 'block';
+                    document.getElementById('continueBtn').style.display = 'block';
+                    
+                    // Place marker
+                    if (tempMarker) tempMarker.remove();
+                    tempMarker = new mapboxgl.Marker({ color: '#f59e0b', scale: 1.2 })
+                        .setLngLat([e.lngLat.lng, e.lngLat.lat])
+                        .addTo(map);
+                    
+                    // Animate marker
+                    const markerElement = tempMarker.getElement();
+                    markerElement.style.animation = 'bounce 0.5s ease-out';
+                    
+                    // Change cursor back
+                    map.getCanvas().style.cursor = 'pointer';
+                }
+            });
+
+            loadSubmissions();
+            checkModeratorStatus();
+        }
+
+        function updateStats() {
+            document.getElementById('totalLocations').textContent = submissions.length;
+            const totalVotes = submissions.reduce((sum, sub) => sum + sub.votes, 0);
+            document.getElementById('totalVerifications').textContent = totalVotes;
+        }
+
+        async function loadSubmissions() {
+            try {
+                const response = await fetch('/api/submissions');
+                submissions = await response.json();
+                updateStats();
+                displayMarkers();
+                displayLocationsList();
+            } catch (error) {
+                console.error('Error loading submissions:', error);
+            }
+        }
+
+        function displayMarkers() {
+            markers.forEach(marker => marker.remove());
+            markers = [];
+
+            const filter = document.getElementById('resourceFilter').value;
+            const filtered = filter ? submissions.filter(s => s.resource_type === filter) : submissions;
+
+            filtered.forEach(sub => {
+                const wrapper = document.createElement('div');
+                wrapper.style.width = '32px';
+                wrapper.style.height = '32px';
+                wrapper.style.display = 'flex';
+                wrapper.style.alignItems = 'center';
+                wrapper.style.justifyContent = 'center';
+                wrapper.style.cursor = 'pointer';
+
+                const inner = document.createElement('div');
+                inner.style.width = '28px';
+                inner.style.height = '28px';
+                inner.style.borderRadius = '50%';
+                inner.style.border = '3px solid white';
+                inner.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+                inner.style.transition = 'transform 0.2s ease, box-shadow 0.2s ease';
+
+                const typeMeta = RESOURCE_TYPE_MAP[sub.resource_type] || {};
+                const label = typeMeta.label || sub.resource_type;
+                const markerColor = typeMeta.markerColor || DEFAULT_MARKER_COLOR;
+                inner.style.backgroundColor = markerColor;
+                wrapper.setAttribute('title', label);
+
+                wrapper.appendChild(inner);
+
+                wrapper.addEventListener('mouseenter', () => {
+                    inner.style.transform = 'scale(1.15)';
+                    inner.style.boxShadow = '0 6px 16px rgba(0,0,0,0.35)';
+                });
+
+                wrapper.addEventListener('mouseleave', () => {
+                    inner.style.transform = 'scale(1)';
+                    inner.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+                });
+
+                wrapper.addEventListener('click', () => showPopup(sub));
+
+                const marker = new mapboxgl.Marker(wrapper)
+                    .setLngLat([sub.longitude, sub.latitude])
+                    .addTo(map);
+
+                markers.push(marker);
+            });
+        }
+
+        async function showPopup(sub) {
+            let imageHtml = '';
+            try {
+                const imgResponse = await fetch(`/api/submissions/${sub.id}/image`);
+                if (imgResponse.ok) {
+                    const imageData = await imgResponse.json();
+                    if (imageData && imageData.image) {
+                        const mime = validateMime(imageData.mime);
+                        imageHtml = `<img src="data:${mime};base64,${imageData.image}" alt="Location photo">`;
+                    }
+                }
+            } catch (e) {}
+
+            const typeMeta = RESOURCE_TYPE_MAP[sub.resource_type] || {};
+            const label = typeMeta.label || sub.resource_type;
+
+            const popup = new mapboxgl.Popup({ offset: 25 })
+                .setLngLat([sub.longitude, sub.latitude])
+                .setHTML(`
+                    <div class="popup-content">
+                        <h3>${escapeHtml(label)}</h3>
+                        <p style="color: var(--gray-600);">${escapeHtml(sub.description || 'No description provided')}</p>
+                        ${imageHtml}
+                        <div class="verification-badge ${sub.votes >= 3 ? 'verified' : ''}">
+                            <span>✓</span> ${sub.votes} verification${sub.votes !== 1 ? 's' : ''}
+                        </div>
+                        <button class="btn btn-success" onclick="voteForLocation(${sub.id})" style="font-size: 13px;">
+                            <span>✓</span> Verify This Location
+                        </button>
+                    </div>
+                `)
+                .addTo(map);
+        }
+
+        function displayLocationsList() {
+            const filter = document.getElementById('resourceFilter').value;
+            const filtered = filter ? submissions.filter(s => s.resource_type === filter) : submissions;
+            
+            const list = document.getElementById('locationsList');
+            if (filtered.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📍</div>
+                        <p>No locations found</p>
+                    </div>
+                `;
+                return;
+            }
+
+            list.innerHTML = filtered.map(sub => {
+                const typeMeta = RESOURCE_TYPE_MAP[sub.resource_type] || {};
+                const accentColor = typeMeta.markerColor || DEFAULT_MARKER_COLOR;
+                const badgeBg = typeMeta.badgeBackground || DEFAULT_BADGE_BACKGROUND;
+                const badgeColor = typeMeta.badgeColor || DEFAULT_BADGE_COLOR;
+                const label = typeMeta.label || sub.resource_type;
+                return `
+                <div class="location-card" style="--accent-color: ${accentColor};" data-type="${escapeHtml(sub.resource_type)}" onclick="flyToLocation(${sub.latitude}, ${sub.longitude})">
+                    <div class="card-header">
+                        <span class="card-title">${escapeHtml(label)}</span>
+                        <span class="card-badge" style="background: ${badgeBg}; color: ${badgeColor};">${escapeHtml(label)}</span>
+                    </div>
+                    <p class="card-description">${escapeHtml(sub.description || 'No description provided')}</p>
+                    <div class="card-footer">
+                        <span class="verification-badge ${sub.votes >= 3 ? 'verified' : ''}">
+                            <span>✓</span> ${sub.votes}
+                        </span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function flyToLocation(lat, lng) {
+            map.flyTo({ 
+                center: [lng, lat], 
+                zoom: 16,
+                duration: 1500,
+                essential: true
+            });
+        }
+
+        function openSubmitModal() {
+            const modal = document.getElementById('submitModal');
+            modal.style.display = 'block';
+            document.getElementById('submitForm').reset();
+            document.getElementById('submitAlert').innerHTML = '';
+            document.getElementById('locationStep').style.display = 'block';
+            document.getElementById('detailsStep').style.display = 'none';
+            document.getElementById('selectedLocation').style.display = 'none';
+            document.getElementById('continueBtn').style.display = 'none';
+            if (tempMarker) tempMarker.remove();
+            modal.classList.add('pass-through');
+            
+            // Add visual feedback that map is clickable
+            map.getCanvas().style.cursor = 'crosshair';
+            document.getElementById('map').classList.add('selecting-location');
+        }
+
+        function closeSubmitModal() {
+            const modal = document.getElementById('submitModal');
+            modal.style.display = 'none';
+            modal.classList.remove('pass-through');
+            if (tempMarker) tempMarker.remove();
+            map.getCanvas().style.cursor = '';
+            document.getElementById('map').classList.remove('selecting-location');
+        }
+
+        function clearLocation() {
+            if (tempMarker) tempMarker.remove();
+            document.getElementById('selectedLocation').style.display = 'none';
+            document.getElementById('continueBtn').style.display = 'none';
+            document.getElementById('submitLat').value = '';
+            document.getElementById('submitLng').value = '';
+            map.getCanvas().style.cursor = 'crosshair';
+            document.getElementById('map').classList.add('selecting-location');
+        }
+
+        function continueToDetails() {
+            document.getElementById('locationStep').style.display = 'none';
+            document.getElementById('detailsStep').style.display = 'block';
+            map.getCanvas().style.cursor = '';
+            document.getElementById('map').classList.remove('selecting-location');
+            document.getElementById('submitModal').classList.remove('pass-through');
+        }
+
+        function backToLocation() {
+            document.getElementById('detailsStep').style.display = 'none';
+            document.getElementById('locationStep').style.display = 'block';
+            map.getCanvas().style.cursor = 'crosshair';
+            document.getElementById('map').classList.add('selecting-location');
+            document.getElementById('submitModal').classList.add('pass-through');
+        }
+
+        async function submitLocation(event) {
+            event.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('latitude', document.getElementById('submitLat').value);
+            formData.append('longitude', document.getElementById('submitLng').value);
+            formData.append('resource_type', document.getElementById('resourceType').value);
+            formData.append('description', document.getElementById('description').value);
+            
+            const imageFile = document.getElementById('image').files[0];
+            if (imageFile) {
+                formData.append('image', imageFile);
+            }
+
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    showNotification('Submission received! A moderator will review it shortly.', 'success');
+                    closeSubmitModal();
+                } else {
+                    const error = await response.json();
+                    document.getElementById('submitAlert').innerHTML = 
+                        `<div class="alert alert-error"><span>✕</span> <div>${escapeHtml(error.error)}</div></div>`;
+                }
+            } catch (error) {
+                document.getElementById('submitAlert').innerHTML = 
+                    '<div class="alert alert-error"><span>✕</span> <div>Network error. Please try again.</div></div>';
+            }
+        }
+
+        async function voteForLocation(id) {
+            try {
+                const response = await fetch(`/api/vote/${id}`, { method: 'POST' });
+                
+                if (response.ok) {
+                    showNotification('Thank you for verifying this location!', 'success');
+                    loadSubmissions();
+                } else {
+                    const error = await response.json();
+                    showNotification(error.error || 'Could not verify', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error. Please try again.', 'error');
+            }
+        }
+
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type}`;
+            notification.style.position = 'fixed';
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '10000';
+            notification.style.minWidth = '300px';
+            notification.style.animation = 'slideUp 0.3s ease-out';
+            notification.innerHTML = `<span>${type === 'success' ? '✓' : '✕'}</span> <div>${escapeHtml(message)}</div>`;
+            document.body.appendChild(notification);
+            setTimeout(() => {
+                notification.style.animation = 'fadeOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        async function moderatorLogin(event) {
+            event.preventDefault();
+            
+            const data = {
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value
+            };
+
+            try {
+                const response = await fetch('/api/moderator/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    closeModeratorModal();
+                    checkModeratorStatus();
+                    showNotification('Logged in successfully', 'success');
+                } else {
+                    document.getElementById('moderatorAlert').innerHTML = 
+                        '<div class="alert alert-error"><span>✕</span> <div>Invalid credentials</div></div>';
+                }
+            } catch (error) {
+                document.getElementById('moderatorAlert').innerHTML = 
+                    '<div class="alert alert-error"><span>✕</span> <div>Network error</div></div>';
+            }
+        }
+
+        async function checkModeratorStatus() {
+            try {
+                const response = await fetch('/api/moderator/check');
+                const data = await response.json();
+                document.getElementById('moderatorPanel').style.display = 
+                    data.logged_in ? 'block' : 'none';
+            } catch (error) {}
+        }
+
+        async function loadPendingSubmissions() {
+            try {
+                const response = await fetch('/api/moderator/pending');
+                const pending = await response.json();
+                
+                const list = document.getElementById('pendingList');
+                if (pending.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✓</div>
+                            <p>No pending submissions</p>
+                        </div>
+                    `;
+                } else {
+                    list.innerHTML = pending.map(sub => {
+                        const typeMeta = RESOURCE_TYPE_MAP[sub.resource_type] || {};
+                        const label = typeMeta.label || sub.resource_type;
+                        return `
+                        <div class="pending-item">
+                            <h4>${escapeHtml(label)}</h4>
+                            <p><strong>Location:</strong> ${sub.latitude.toFixed(6)}, ${sub.longitude.toFixed(6)}</p>
+                            <p><strong>Description:</strong> ${escapeHtml(sub.description || 'None provided')}</p>
+                            <p><strong>Submitted:</strong> ${new Date(sub.created_at).toLocaleString()}</p>
+                            <div class="pending-actions">
+                                <button class="btn-approve" onclick="approveSubmission(${sub.id})">✓ Approve</button>
+                                <button class="btn-reject" onclick="rejectSubmission(${sub.id})">✗ Reject</button>
+                            </div>
+                        </div>
+                    `;
+                    }).join('');
+                }
+                
+                document.getElementById('pendingModal').style.display = 'block';
+            } catch (error) {
+                showNotification('Error loading pending submissions', 'error');
+            }
+        }
+
+        async function approveSubmission(id) {
+            if (!confirm('Approve this submission?')) return;
+            
+            try {
+                const response = await fetch(`/api/moderator/approve/${id}`, { method: 'POST' });
+                if (response.ok) {
+                    showNotification('Submission approved', 'success');
+                    loadPendingSubmissions();
+                    loadSubmissions();
+                }
+            } catch (error) {
+                showNotification('Error approving submission', 'error');
+            }
+        }
+
+        async function rejectSubmission(id) {
+            if (!confirm('Reject and delete this submission?')) return;
+            
+            try {
+                const response = await fetch(`/api/moderator/reject/${id}`, { method: 'POST' });
+                if (response.ok) {
+                    showNotification('Submission rejected', 'success');
+                    loadPendingSubmissions();
+                }
+            } catch (error) {
+                showNotification('Error rejecting submission', 'error');
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('/api/moderator/logout', { method: 'POST' });
+                checkModeratorStatus();
+                showNotification('Logged out successfully', 'success');
+            } catch (error) {}
+        }
+
+        function openModeratorLogin() {
+            document.getElementById('moderatorModal').style.display = 'block';
+            document.getElementById('moderatorForm').reset();
+            document.getElementById('moderatorAlert').innerHTML = '';
+        }
+
+        function closeModeratorModal() {
+            document.getElementById('moderatorModal').style.display = 'none';
+        }
+
+        function closePendingModal() {
+            document.getElementById('pendingModal').style.display = 'none';
+        }
+
+        function openVoteInfo() {
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.style.display = 'block';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2>How to Verify Locations</h2>
+                        <button class="close" onclick="this.closest('.modal').remove()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="margin-bottom: 16px;">Help the community by verifying the accuracy and accessibility of medical supply locations:</p>
+                        <ol style="margin-left: 20px; line-height: 1.8;">
+                            <li><strong>Find a location</strong> on the map or in the list</li>
+                            <li><strong>Visit the location</strong> to confirm the equipment exists</li>
+                            <li><strong>Check accessibility</strong> - ensure it's available and reachable</li>
+                            <li><strong>Click "Verify"</strong> to add your confirmation</li>
+                        </ol>
+                        <div class="alert alert-success" style="margin-top: 20px;">
+                            <span>ℹ️</span>
+                            <div>You can verify each location once every 30 days. Locations with 3+ verifications are marked as "verified".</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
+        }
+
+        function validateMime(mime) {
+            const allowed = new Set(['image/jpeg', 'image/png', 'image/jpg']);
+            return allowed.has(mime) ? mime : 'image/jpeg';
+        }
+
+        document.getElementById('resourceFilter').addEventListener('change', () => {
+            displayMarkers();
+            displayLocationsList();
+        });
+
+        window.addEventListener('load', initMap);
+
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.style.display = 'none';
+                if (tempMarker) tempMarker.remove();
+            }
+        }
+    </script>
+</body>
+</html>

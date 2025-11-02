@@ -1,0 +1,30 @@
+[
+    {
+        "value": "First Aid Kit",
+        "label": "First Aid Kit",
+        "badgeBackground": "#d1fae5",
+        "badgeColor": "#065f46",
+        "markerColor": "#10b981"
+    },
+    {
+        "value": "AED",
+        "label": "AED (Defibrillator)",
+        "badgeBackground": "#fee2e2",
+        "badgeColor": "#991b1b",
+        "markerColor": "#ef4444"
+    },
+    {
+        "value": "Emergency Kit",
+        "label": "Emergency Kit",
+        "badgeBackground": "#fef3c7",
+        "badgeColor": "#92400e",
+        "markerColor": "#f59e0b"
+    },
+    {
+        "value": "Other",
+        "label": "Other",
+        "badgeBackground": "#dbeafe",
+        "badgeColor": "#1e40af",
+        "markerColor": "#2563eb"
+    }
+]

@@ -35,6 +35,7 @@ export ADMIN_PASSWORD="choose-a-strong-password"
 	2. Add the secret to an authenticator app (Google Authenticator, 1Password, etc.) using either the raw code or the otpauth URL from the log output.
 	3. Sign in to the moderator panel with the logged password plus the six-digit code from your authenticator.
 	4. Immediately rotate the password (`export ADMIN_PASSWORD=...` and restart) once you confirm the TOTP token works.
+	5. If you cannot access logs (e.g., managed hosting), set `ADMIN_BOOTSTRAP_PATH=/secure/location/bootstrap.txt` before launch; the app will write the same password and TOTP details to that file (chmod 600) when it auto-provisions the admin account.
 
 ## Database
 

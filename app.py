@@ -5,10 +5,20 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import threading
+import logging
+import pyotp
 from flask import Flask, request, jsonify, session, g, render_template, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
+def configure_logging():
+    if app.logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = secrets.token_hex(32)  # Generate secure secret key
@@ -32,6 +42,8 @@ DATABASE = app.config['DATABASE']
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 _generated_admin_password = None
+_generated_admin_totp_secret = None
+_generated_admin_totp_uri = None
 
 
 def load_resource_types():
@@ -89,7 +101,11 @@ def init_db():
 
     db.executescript(schema_sql)
 
+    ensure_totp_column(db)
+
     global _generated_admin_password
+    global _generated_admin_totp_secret
+    global _generated_admin_totp_uri
 
     if ADMIN_PASSWORD:
         password_hash = generate_password_hash(ADMIN_PASSWORD, method='pbkdf2:sha256', salt_length=16)
@@ -101,18 +117,42 @@ def init_db():
         )
         app.logger.info('Moderator credentials for %s loaded from ADMIN_PASSWORD environment variable.', ADMIN_USERNAME)
     else:
-        cursor = db.execute('SELECT id FROM moderators WHERE username = ?', (ADMIN_USERNAME,))
-        if cursor.fetchone() is None:
+        cursor = db.execute('SELECT id, totp_secret FROM moderators WHERE username = ?', (ADMIN_USERNAME,))
+        row = cursor.fetchone()
+        if row is None:
             generated_password = secrets.token_urlsafe(16)
             _generated_admin_password = generated_password
+            totp_secret = pyotp.random_base32()
+            _generated_admin_totp_secret = totp_secret
+            _generated_admin_totp_uri = pyotp.TOTP(totp_secret).provisioning_uri(name=ADMIN_USERNAME, issuer_name='AidMap')
             password_hash = generate_password_hash(generated_password, method='pbkdf2:sha256', salt_length=16)
             db.execute(
-                'INSERT INTO moderators (username, password_hash) VALUES (?, ?)',
-                (ADMIN_USERNAME, password_hash)
+                'INSERT INTO moderators (username, password_hash, totp_secret) VALUES (?, ?, ?)',
+                (ADMIN_USERNAME, password_hash, totp_secret)
             )
             app.logger.warning('Generated one-time admin password for %s; set ADMIN_PASSWORD to override.', ADMIN_USERNAME)
+            app.logger.warning('Generated credentials - Username: %s, Password: %s', ADMIN_USERNAME, generated_password)
+            app.logger.warning('Generated TOTP secret for %s; enroll it in an authenticator app immediately.', ADMIN_USERNAME)
+            app.logger.warning('Generated TOTP secret value: %s', totp_secret)
+            app.logger.warning('Enroll by scanning the otpauth URI in your authenticator app: %s', _generated_admin_totp_uri)
+        elif not row['totp_secret']:
+            totp_secret = pyotp.random_base32()
+            _generated_admin_totp_secret = totp_secret
+            _generated_admin_totp_uri = pyotp.TOTP(totp_secret).provisioning_uri(name=ADMIN_USERNAME, issuer_name='AidMap')
+            db.execute('UPDATE moderators SET totp_secret = ? WHERE id = ?', (totp_secret, row['id']))
+            app.logger.warning('Generated TOTP secret for existing moderator %s; enroll it in an authenticator app immediately.', ADMIN_USERNAME)
+            app.logger.warning('Generated TOTP secret value: %s', totp_secret)
+            app.logger.warning('Enroll by scanning the otpauth URI in your authenticator app: %s', _generated_admin_totp_uri)
 
     db.commit()
+
+
+def ensure_totp_column(db):
+    cursor = db.execute("PRAGMA table_info(moderators)")
+    columns = {row['name'] for row in cursor.fetchall()}
+    if 'totp_secret' not in columns:
+        db.execute('ALTER TABLE moderators ADD COLUMN totp_secret TEXT')
+        app.logger.info('Added totp_secret column to moderators table.')
 
 
 def ensure_db_initialized():
@@ -284,18 +324,29 @@ def vote(submission_id):
 @app.route('/api/moderator/login', methods=['POST'])
 def moderator_login():
     """Moderator login"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     username = data.get('username', '').strip()
     password = data.get('password', '')
     
     db = get_db()
-    cursor = db.execute('SELECT password_hash FROM moderators WHERE username = ?', (username,))
+    cursor = db.execute('SELECT password_hash, totp_secret FROM moderators WHERE username = ?', (username,))
     row = cursor.fetchone()
     
+    session.pop('moderator_logged_in', None)
+    session.pop('moderator_username', None)
+    session.pop('totp_enrolled', None)
+    session.pop('mfa_pending', None)
+
     if row and check_password_hash(row['password_hash'], password):
-        session['moderator_logged_in'] = True
         session.permanent = True
-        return jsonify({'success': True})
+        if row['totp_secret']:
+            session['mfa_pending'] = username
+            return jsonify({'success': True, 'requires_2fa': True})
+
+        session['moderator_logged_in'] = True
+        session['moderator_username'] = username
+        session['totp_enrolled'] = False
+        return jsonify({'success': True, 'requires_2fa': False})
     
     return jsonify({'error': 'Invalid credentials'}), 401
 
@@ -303,12 +354,80 @@ def moderator_login():
 def moderator_logout():
     """Moderator logout"""
     session.pop('moderator_logged_in', None)
+    session.pop('moderator_username', None)
+    session.pop('totp_enrolled', None)
+    session.pop('mfa_pending', None)
+    return jsonify({'success': True})
+
+
+@app.route('/api/moderator/login/totp', methods=['POST'])
+def moderator_login_totp():
+    """Verify moderator TOTP code"""
+    pending_username = session.get('mfa_pending')
+    if not pending_username:
+        return jsonify({'error': 'No pending 2FA challenge'}), 400
+
+    data = request.get_json(silent=True) or {}
+    code_raw = str(data.get('code', '') or '')
+    code = ''.join(ch for ch in code_raw if ch.isdigit())
+    if not code:
+        return jsonify({'error': 'Invalid code'}), 400
+
+    db = get_db()
+    cursor = db.execute('SELECT totp_secret FROM moderators WHERE username = ?', (pending_username,))
+    row = cursor.fetchone()
+
+    if not row or not row['totp_secret']:
+        session.pop('mfa_pending', None)
+        return jsonify({'error': '2FA not configured'}), 400
+
+    totp = pyotp.TOTP(row['totp_secret'])
+    if not totp.verify(code, valid_window=1):
+        return jsonify({'error': 'Invalid code'}), 401
+
+    session.pop('mfa_pending', None)
+    session['moderator_logged_in'] = True
+    session['moderator_username'] = pending_username
+    session['totp_enrolled'] = True
+    session.permanent = True
     return jsonify({'success': True})
 
 @app.route('/api/moderator/check', methods=['GET'])
 def check_moderator():
     """Check if moderator is logged in"""
-    return jsonify({'logged_in': session.get('moderator_logged_in', False)})
+    return jsonify({
+        'logged_in': session.get('moderator_logged_in', False),
+        'totp_enrolled': session.get('totp_enrolled', False)
+    })
+
+
+@app.route('/api/moderator/2fa/enroll', methods=['POST'])
+@require_moderator
+def enroll_totp():
+    """Enroll the current moderator in TOTP-based 2FA"""
+    username = session.get('moderator_username')
+    if not username:
+        return jsonify({'error': 'Session missing username'}), 400
+
+    db = get_db()
+    cursor = db.execute('SELECT totp_secret FROM moderators WHERE username = ?', (username,))
+    row = cursor.fetchone()
+
+    if not row:
+        return jsonify({'error': 'Moderator not found'}), 404
+
+    if row['totp_secret']:
+        session['totp_enrolled'] = True
+        return jsonify({'error': '2FA already enabled'}), 400
+
+    secret = pyotp.random_base32()
+    db.execute('UPDATE moderators SET totp_secret = ? WHERE username = ?', (secret, username))
+    db.commit()
+
+    totp_uri = pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name='AidMap')
+    session['totp_enrolled'] = True
+
+    return jsonify({'success': True, 'secret': secret, 'otpauth_url': totp_uri})
 
 @app.route('/api/moderator/pending', methods=['GET'])
 @require_moderator
@@ -384,15 +503,26 @@ if __name__ == '__main__':
     with app.app_context():
         ensure_db_initialized()
     print("Database initialized successfully!")
+    configure_logging()
     if ADMIN_PASSWORD:
-        print(f"Moderator credentials loaded from environment - Username: {ADMIN_USERNAME}")
+        app.logger.info("Moderator credentials loaded from environment - Username: %s", ADMIN_USERNAME)
     elif _generated_admin_password:
-        print("\nSECURITY WARNING: A temporary moderator password was generated.")
-        print(f"Generated credentials - Username: {ADMIN_USERNAME}, Password: {_generated_admin_password}")
-        print("Set the ADMIN_PASSWORD environment variable or change the password after login.")
+        app.logger.warning("SECURITY WARNING: A temporary moderator password was generated.")
+        app.logger.warning("Generated credentials - Username: %s, Password: %s", ADMIN_USERNAME, _generated_admin_password)
+        app.logger.warning("Set the ADMIN_PASSWORD environment variable or change the password after login.")
+        if _generated_admin_totp_secret:
+            app.logger.warning("2FA REQUIRED: A temporary TOTP secret was generated for the moderator account.")
+            app.logger.warning("TOTP secret: %s", _generated_admin_totp_secret)
+            if _generated_admin_totp_uri:
+                app.logger.warning("TOTP provisioning URI: %s", _generated_admin_totp_uri)
+            app.logger.warning("Enroll this secret in an authenticator app before attempting to log in.")
     else:
-        print("Moderator credentials unchanged; ensure the existing password is strong.")
-    print("="*60 + "\n")
-    print("Starting server on http://127.0.0.1:5000")
-    print("="*60 + "\n")
+        app.logger.info("Moderator credentials unchanged; ensure the existing password is strong.")
+        if _generated_admin_totp_secret:
+            app.logger.warning("2FA REQUIRED: A TOTP secret was generated for the moderator account.")
+            app.logger.warning("TOTP secret: %s", _generated_admin_totp_secret)
+            if _generated_admin_totp_uri:
+                app.logger.warning("TOTP provisioning URI: %s", _generated_admin_totp_uri)
+            app.logger.warning("Enroll this secret in an authenticator app before attempting to log in.")
+    app.logger.info("Starting server on http://127.0.0.1:5000")
     app.run(debug=True, port=5000)

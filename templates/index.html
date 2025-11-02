@@ -542,6 +542,25 @@
             border: 1px solid #fca5a5;
         }
 
+        .alert-warning {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fcd34d;
+        }
+
+        .secret-box {
+            background: var(--gray-900);
+            color: #fef3c7;
+            padding: 16px;
+            border-radius: 10px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 16px;
+            letter-spacing: 2px;
+            text-align: center;
+            margin-bottom: 16px;
+            word-break: break-all;
+        }
+
         .mapboxgl-popup-content {
             padding: 20px;
             min-width: 260px;
@@ -753,6 +772,7 @@
                 <div id="moderatorPanel" class="moderator-panel" style="display: none;">
                     <h3><span>⚡</span> Moderator Panel</h3>
                     <button class="btn btn-primary" onclick="loadPendingSubmissions()">Review Pending Submissions</button>
+                    <button id="enable2faButton" class="btn btn-outline" onclick="openTotpEnrollment()" style="margin-top: 10px; display: none;">Set Up Two-Factor Auth</button>
                     <button class="btn btn-outline" onclick="logout()" style="margin-top: 10px;">Logout</button>
                 </div>
 
@@ -859,6 +879,18 @@
                     </div>
                     <button type="submit" class="btn btn-primary">Login</button>
                 </form>
+                <form id="totpForm" onsubmit="submitTotp(event)" style="display: none;">
+                    <div class="form-group">
+                        <label for="totpCode">Authenticator Code</label>
+                        <input type="text" id="totpCode" required inputmode="numeric" autocomplete="one-time-code" maxlength="12">
+                        <p class="form-hint">Enter the 6-digit code from your authenticator app.</p>
+                    </div>
+                    <div id="totpAlert"></div>
+                    <div style="display: flex; gap: 10px;">
+                        <button type="button" class="btn btn-outline" style="flex: 1;" onclick="cancelTotpChallenge()">Back</button>
+                        <button type="submit" class="btn btn-primary" style="flex: 1;">Verify</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -872,6 +904,29 @@
             </div>
             <div class="modal-body">
                 <div id="pendingList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOTP Enrollment Modal -->
+    <div id="totpModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Set Up Two-Factor Authentication</h2>
+                <button class="close" onclick="closeTotpModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="totpModalAlert"></div>
+                <p style="margin-bottom: 16px;">Scan or enter this code in your authenticator app before logging out.</p>
+                <div class="secret-box" id="totpSecretBox">Loading...</div>
+                <button type="button" class="btn btn-outline" style="margin-bottom: 16px;" onclick="copyTotpSecret()">Copy Secret</button>
+                <p id="totpUriParagraph" style="margin-bottom: 20px; display: none;">
+                    <a id="totpUriLink" href="#" target="_blank" rel="noopener">Tap here to add the code automatically.</a>
+                </p>
+                <div class="alert alert-warning">
+                    <span>⚠️</span>
+                    <div>Keep a backup of this code in a secure password manager. You will need it to log in after this session.</div>
+                </div>
             </div>
         </div>
     </div>
@@ -906,6 +961,9 @@
         let markers = [];
         let submissions = [];
         let tempMarker = null;
+    let pendingTotpChallenge = false;
+    let latestTotpSecret = null;
+    let latestTotpOtpauth = null;
 
         // Initialize map
         function initMap() {
@@ -1241,14 +1299,27 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
+                const payload = await response.json();
 
                 if (response.ok) {
+                    if (payload.requires_2fa) {
+                        pendingTotpChallenge = true;
+                        document.getElementById('moderatorAlert').innerHTML = '';
+                        document.getElementById('moderatorForm').style.display = 'none';
+                        document.getElementById('totpForm').style.display = 'block';
+                        document.getElementById('totpForm').reset();
+                        document.getElementById('totpAlert').innerHTML = '';
+                        setTimeout(() => document.getElementById('totpCode').focus(), 50);
+                        return;
+                    }
+
                     closeModeratorModal();
                     checkModeratorStatus();
                     showNotification('Logged in successfully', 'success');
                 } else {
+                    pendingTotpChallenge = false;
                     document.getElementById('moderatorAlert').innerHTML = 
-                        '<div class="alert alert-error"><span>✕</span> <div>Invalid credentials</div></div>';
+                        `<div class="alert alert-error"><span>✕</span> <div>${escapeHtml(payload.error || 'Invalid credentials')}</div></div>`;
                 }
             } catch (error) {
                 document.getElementById('moderatorAlert').innerHTML = 
@@ -1256,12 +1327,79 @@
             }
         }
 
+        async function submitTotp(event) {
+            event.preventDefault();
+
+            if (!pendingTotpChallenge) {
+                await cancelTotpChallenge();
+                return;
+            }
+
+            const rawCode = document.getElementById('totpCode').value || '';
+            const code = rawCode.replace(/\D+/g, '');
+            if (!code) {
+                document.getElementById('totpAlert').innerHTML = 
+                    '<div class="alert alert-error"><span>✕</span> <div>Enter the code from your authenticator.</div></div>';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/moderator/login/totp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const payload = await response.json();
+
+                if (response.ok) {
+                    pendingTotpChallenge = false;
+                    resetModeratorLogin();
+                    closeModeratorModal();
+                    checkModeratorStatus();
+                    showNotification('2FA verification succeeded', 'success');
+                } else {
+                    document.getElementById('totpAlert').innerHTML = 
+                        `<div class="alert alert-error"><span>✕</span> <div>${escapeHtml(payload.error || 'Invalid code')}</div></div>`;
+                }
+            } catch (error) {
+                document.getElementById('totpAlert').innerHTML = 
+                    '<div class="alert alert-error"><span>✕</span> <div>Network error</div></div>';
+            }
+        }
+
+        function resetModeratorLogin() {
+            pendingTotpChallenge = false;
+            document.getElementById('moderatorForm').reset();
+            document.getElementById('totpForm').reset();
+            document.getElementById('moderatorAlert').innerHTML = '';
+            document.getElementById('totpAlert').innerHTML = '';
+            document.getElementById('moderatorForm').style.display = 'block';
+            document.getElementById('totpForm').style.display = 'none';
+        }
+
+        async function cancelTotpChallenge(skipLogout = false) {
+            const hadChallenge = pendingTotpChallenge;
+            pendingTotpChallenge = false;
+
+            if (hadChallenge && !skipLogout) {
+                try {
+                    await fetch('/api/moderator/logout', { method: 'POST' });
+                } catch (error) {}
+            }
+
+            resetModeratorLogin();
+        }
+
         async function checkModeratorStatus() {
             try {
                 const response = await fetch('/api/moderator/check');
                 const data = await response.json();
-                document.getElementById('moderatorPanel').style.display = 
-                    data.logged_in ? 'block' : 'none';
+                const panel = document.getElementById('moderatorPanel');
+                const enableButton = document.getElementById('enable2faButton');
+                panel.style.display = data.logged_in ? 'block' : 'none';
+                if (enableButton) {
+                    enableButton.style.display = data.logged_in && !data.totp_enrolled ? 'block' : 'none';
+                }
             } catch (error) {}
         }
 
@@ -1335,19 +1473,81 @@
         async function logout() {
             try {
                 await fetch('/api/moderator/logout', { method: 'POST' });
+                resetModeratorLogin();
                 checkModeratorStatus();
                 showNotification('Logged out successfully', 'success');
             } catch (error) {}
         }
 
+        function resetTotpModal() {
+            latestTotpSecret = null;
+            latestTotpOtpauth = null;
+            document.getElementById('totpModalAlert').innerHTML = '';
+            document.getElementById('totpSecretBox').textContent = 'Loading...';
+            document.getElementById('totpUriParagraph').style.display = 'none';
+            document.getElementById('totpUriLink').href = '#';
+        }
+
+        function closeTotpModal() {
+            document.getElementById('totpModal').style.display = 'none';
+            resetTotpModal();
+        }
+
+        async function openTotpEnrollment() {
+            resetTotpModal();
+            document.getElementById('totpModal').style.display = 'block';
+
+            try {
+                const response = await fetch('/api/moderator/2fa/enroll', { method: 'POST' });
+                const payload = await response.json();
+
+                if (response.ok) {
+                    latestTotpSecret = payload.secret;
+                    latestTotpOtpauth = payload.otpauth_url || null;
+                    document.getElementById('totpSecretBox').textContent = payload.secret;
+
+                    if (payload.otpauth_url) {
+                        document.getElementById('totpUriParagraph').style.display = 'block';
+                        document.getElementById('totpUriLink').href = payload.otpauth_url;
+                    }
+
+                    document.getElementById('totpModalAlert').innerHTML = 
+                        '<div class="alert alert-success"><span>✓</span> <div>Two-factor authentication is now enabled. Add this code to your authenticator app.</div></div>';
+                    checkModeratorStatus();
+                } else {
+                    document.getElementById('totpSecretBox').textContent = 'Unavailable';
+                    document.getElementById('totpModalAlert').innerHTML = 
+                        `<div class="alert alert-error"><span>✕</span> <div>${escapeHtml(payload.error || 'Unable to enable 2FA')}</div></div>`;
+                }
+            } catch (error) {
+                document.getElementById('totpSecretBox').textContent = 'Unavailable';
+                document.getElementById('totpModalAlert').innerHTML = 
+                    '<div class="alert alert-error"><span>✕</span> <div>Network error. Please try again.</div></div>';
+            }
+        }
+
+        async function copyTotpSecret() {
+            if (!latestTotpSecret) {
+                showNotification('Generate a secret first', 'error');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(latestTotpSecret);
+                showNotification('Secret copied to clipboard', 'success');
+            } catch (error) {
+                showNotification('Unable to copy to clipboard', 'error');
+            }
+        }
+
         function openModeratorLogin() {
+            resetModeratorLogin();
             document.getElementById('moderatorModal').style.display = 'block';
-            document.getElementById('moderatorForm').reset();
-            document.getElementById('moderatorAlert').innerHTML = '';
         }
 
         function closeModeratorModal() {
             document.getElementById('moderatorModal').style.display = 'none';
+            cancelTotpChallenge();
         }
 
         function closePendingModal() {
@@ -1409,6 +1609,12 @@
             if (event.target.classList.contains('modal')) {
                 event.target.style.display = 'none';
                 if (tempMarker) tempMarker.remove();
+                if (event.target.id === 'moderatorModal') {
+                    cancelTotpChallenge();
+                }
+                if (event.target.id === 'totpModal') {
+                    resetTotpModal();
+                }
             }
         }
     </script>
